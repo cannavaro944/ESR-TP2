@@ -24,23 +24,23 @@ def handle_peer(conn, addr):
     """Gere a comunicação bidirecional com um vizinho."""
     print(f"[+] Conexão aceite de vizinho em {addr}")
     ip_vizinho = addr[0]
-    vizinhos_ativos[ip_vizinhos] = conn
+    vizinhos_ativos[ip_vizinho] = conn
     try:
         while True:
             data = conn.recv(1024)
             if not data:
                 break
             mensagem = json.loads(data.decode('utf-8'))
-           if mensagem.get("tipo") == "ANUNCIO":
-		processar_anuncio(mensagem, ip_vizinho)
-	   elif mensagem.get("tipo") == "ATIVA":
-		processar_ativacao(mensagem, ip_vizinho)
+            if mensagem.get("tipo") == "ANUNCIO":
+                processar_anuncio(mensagem, ip_vizinho)
+            elif mensagem.get("tipo") == "ATIVA":
+                processar_ativacao(mensagem, ip_vizinho)
     except Exception as e:
-	print(f"[-] Erro com vizinho {addr}: {e}")
+       print(f"[-] Erro com vizinho {addr}: {e}")
     finally:
-	if ip_vizinho in vizinhos_ativos:
-	   del vizinhos_ativos[ip_vizinho]
-	conn.close()
+        if ip_vizinho in vizinhos_ativos:
+           del vizinhos_ativos[ip_vizinho]
+        conn.close()
 
 def processar_anuncio(msg, ip_vizinho):
     id_fluxo = msg["fluxo"]
