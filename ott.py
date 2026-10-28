@@ -42,6 +42,56 @@ def handle_peer(conn, addr):
 	   del vizinhos_ativos[ip_vizinho]
 	conn.close()
 
+def processar_anuncio(msg, ip_vizinho):
+    id_fluxo = msg["fluxo"]
+    nova_metrica = msg["metrica"] + 1 
+    
+    atualizou_rota = False
+    with rotas_lock:
+        if id_fluxo not in tabela_rotas or nova_metrica < tabela_rotas[id_fluxo]["metrica"]:
+            tabela_rotas[id_fluxo] = {
+                "origem": ip_vizinho,
+                "metrica": nova_metrica,
+                "destinos": set(),
+                "ativa": False
+            }
+            atualizou_rota = True
+            print(f"[*] Nova Rota: {id_fluxo} via {ip_vizinho} (Metrica: {nova_metrica})")
+            
+    # Se descobrimos um caminho mais curto, reencaminhar o anúncio aos outros vizinhos
+    if atualizou_rota:
+        msg_reenvio = {"tipo": "ANUNCIO", "fluxo": id_fluxo, "metrica": nova_metrica}
+        reenviar_a_todos_exceto(msg_reenvio, ip_vizinho)
+
+def processar_ativacao(msg, ip_vizinho):
+    id_fluxo = msg["fluxo"]
+    with rotas_lock:
+        if id_fluxo in tabela_rotas:
+            rota = tabela_rotas[id_fluxo]
+            rota["destinos"].add(ip_vizinho)
+            
+            # Se a rota estava inativa, ativa e avisa o próximo salto (origem)
+            if not rota["ativa"]:
+                rota["ativa"] = True
+                print(f"[*] Rota {id_fluxo} ATIVADA. A pedir ao nó {rota['origem']}...")
+                enviar_para_vizinho({"tipo": "ATIVA", "fluxo": id_fluxo}, rota["origem"])
+
+def reenviar_a_todos_exceto(msg, ip_ignorar):
+    dados = json.dumps(msg).encode('utf-8')
+    for ip, conn in list(vizinhos_ativos.items()):
+        if ip != ip_ignorar:
+            try:
+                conn.sendall(dados)
+            except:
+                pass
+
+def enviar_para_vizinho(msg, ip_destino):
+    if ip_destino in vizinhos_ativos:
+        dados = json.dumps(msg).encode('utf-8')
+        try:
+            vizinhos_ativos[ip_destino].sendall(dados)
+        except:
+            pass
 	
 
 
