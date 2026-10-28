@@ -3,6 +3,11 @@ import json
 import sys
 import threading
 
+rotas_lock = threading.Lock()
+tabelas_rotas = {}
+vizinhos_ativos = {}
+
+
 def handle_incoming_connections(listen_port):
     """Atua como servidor para aceitar conexões TCP dos nós vizinhos."""
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -18,15 +23,27 @@ def handle_incoming_connections(listen_port):
 def handle_peer(conn, addr):
     """Gere a comunicação bidirecional com um vizinho."""
     print(f"[+] Conexão aceite de vizinho em {addr}")
+    ip_vizinho = addr[0]
+    vizinhos_ativos[ip_vizinhos] = conn
     try:
         while True:
             data = conn.recv(1024)
             if not data:
                 break
-            print(f"[Mensagem recebida de {addr}]: {data.decode('utf-8')}")
-    except:
-        pass
-    conn.close()
+            mensagem = json.loads(data.decode('utf-8'))
+           if mensagem.get("tipo") == "ANUNCIO":
+		processar_anuncio(mensagem, ip_vizinho)
+	   elif mensagem.get("tipo") == "ATIVA":
+		processar_ativacao(mensagem, ip_vizinho)
+    except Exception as e:
+	print(f"[-] Erro com vizinho {addr}: {e}")
+    finally:
+	if ip_vizinho in vizinhos_ativos:
+	   del vizinhos_ativos[ip_vizinho]
+	conn.close()
+
+	
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
