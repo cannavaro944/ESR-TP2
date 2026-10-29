@@ -4,7 +4,7 @@ import sys
 import threading
 
 rotas_lock = threading.Lock()
-tabelas_rotas = {}
+tabela_rotas = {}
 vizinhos_ativos = {}
 
 
