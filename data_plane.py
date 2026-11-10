@@ -46,6 +46,17 @@ VIDEO_PORT = 25000
 RECV_BUFFER_SIZE = 65536  # 64 KiB
 
 
+def _normalize_dest(dest) -> tuple:
+    """
+    Normaliza um destino devolvido pela função de callback da camada de controlo.
+    Suporta tanto strings de IP ('10.0.0.1' -> ('10.0.0.1', VIDEO_PORT))
+    como tuplos/listas ('127.0.0.1', 25001) -> ('127.0.0.1', 25001).
+    """
+    if isinstance(dest, (tuple, list)):
+        return (str(dest[0]), int(dest[1]))
+    return (str(dest), VIDEO_PORT)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilitário: criação de socket UDP reutilizável
 # ──────────────────────────────────────────────────────────────────────────────
@@ -202,13 +213,14 @@ class OverlayForwarder:
                     continue
 
                 # ── Replicar pacote para cada destino ─────────────────────────
-                for dest_ip in destinations:
+                for dest in destinations:
+                    dest_addr = _normalize_dest(dest)
                     try:
-                        send_sock.sendto(data, (dest_ip, VIDEO_PORT))
+                        send_sock.sendto(data, dest_addr)
                     except OSError as exc:
                         logger.warning(
                             "OverlayForwarder: erro ao enviar para %s:%d — %s",
-                            dest_ip, VIDEO_PORT, exc
+                            dest_addr[0], dest_addr[1], exc
                         )
 
             except OSError:
@@ -459,13 +471,14 @@ class StreamServer:
                 seq_num = (seq_num + 1) & SEQ_MAX
 
                 # ── Enviar para cada destino ───────────────────────────────────
-                for dest_ip in destinations:
+                for dest in destinations:
+                    dest_addr = _normalize_dest(dest)
                     try:
-                        self._send_sock.sendto(wire_data, (dest_ip, VIDEO_PORT))
+                        self._send_sock.sendto(wire_data, dest_addr)
                     except OSError as exc:
                         logger.warning(
-                            "StreamServer [%s]: erro ao enviar para %s -- %s",
-                            stream_id, dest_ip, exc
+                            "StreamServer [%s]: erro ao enviar para %s:%d -- %s",
+                            stream_id, dest_addr[0], dest_addr[1], exc
                         )
 
                 # ── [PONTO 3] Sleep preciso: compensa I/O + rede ──────────────

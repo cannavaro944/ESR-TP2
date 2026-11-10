@@ -1,3 +1,4 @@
+import os
 import socket
 import json
 import sys
@@ -28,9 +29,9 @@ def obter_destinos_ativos(fluxo):
             for ip in tabela_rotas[fluxo].get("destinos", set()):
                 destinos_finais.append((ip, 25000))
                 
-    # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta 25001
-    if fluxo in fluxos_em_play:
-        destinos_finais.append(("127.0.0.1", 25001))
+        # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta 25001
+        if fluxo in fluxos_em_play:
+            destinos_finais.append(("127.0.0.1", 25001))
         
     return destinos_finais
 
@@ -95,16 +96,21 @@ def handle_peer(conn, addr):
 
 def limpar_rotas_vizinho_falhado(ip_morto):
     """[Elementos 1 e 2] Remove o vizinho caído dos destinos e invalida rotas onde ele era a origem."""
+    desativar_a_montante = []
     with rotas_lock:
         for id_fluxo, rota in list(tabela_rotas.items()):
             if ip_morto in rota["destinos"]:
                 rota["destinos"].remove(ip_morto)
                 print(f"[*] Vizinho caído {ip_morto} removido dos destinos do fluxo {id_fluxo}.")
-                if not rota["destinos"] and rota["origem"] != "LOCAL":
+                if not rota["destinos"] and id_fluxo not in fluxos_em_play:
                     rota["ativa"] = False
+                    if rota["origem"] != "LOCAL" and rota["origem"] != ip_morto:
+                        desativar_a_montante.append((id_fluxo, rota["origem"]))
             if rota["origem"] == ip_morto:
                 print(f"[!] A origem ({ip_morto}) do fluxo {id_fluxo} falhou! A aguardar rota alternativa...")
                 rota["metrica"] = float('inf')
+    for id_fluxo, ip_orig in desativar_a_montante:
+        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, ip_orig)
 
 
 def monitorizar_latencia_vizinhos():
@@ -214,9 +220,25 @@ def processar_desativacao(msg, ip_vizinho):
             rota = tabela_rotas[id_fluxo]
             if ip_vizinho in rota["destinos"]:
                 rota["destinos"].discard(ip_vizinho)
-            if not rota["destinos"] and fluxo not in fluxos_em_play:
+            if not rota["destinos"] and id_fluxo not in fluxos_em_play:
                 rota["ativa"] = False
                 print(f"\n[*] Rota {id_fluxo} DESATIVADA (sem destinos restantes).")
+                if rota["origem"] != "LOCAL":
+                    enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, rota["origem"])
+
+
+def _aguardar_fecho_player(proc, id_fluxo):
+    """[Elemento 3] Aguarda que a janela do VideoClient feche e desativa o consumo local se não houver mais destinos."""
+    proc.wait()
+    with rotas_lock:
+        if id_fluxo not in fluxos_em_play:
+            return
+        fluxos_em_play.discard(id_fluxo)
+        if id_fluxo in tabela_rotas:
+            rota = tabela_rotas[id_fluxo]
+            if not rota["destinos"]:
+                rota["ativa"] = False
+                print(f"\n[*] VideoClient fechado. Rota {id_fluxo} DESATIVADA (sem destinos restantes).")
                 if rota["origem"] != "LOCAL":
                     enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, rota["origem"])
 
@@ -365,27 +387,34 @@ if __name__ == "__main__":
                     print(f"[*] Pedido de ATIVA para {fluxo} enviado a {tabela_rotas[fluxo]['origem']}.")
         elif acao == "desativar":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            fluxos_em_play.discard(fluxo)  # Remove da reprodução local, se estivesse
             with rotas_lock:
+                fluxos_em_play.discard(fluxo)  # Remove da reprodução local, se estivesse
                 if fluxo in tabela_rotas:
                     rota = tabela_rotas[fluxo]
-                    rota["ativa"] = False
-                    rota["destinos"].clear()
-                    if rota["origem"] != "LOCAL":
-                        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": fluxo}, rota["origem"])
-                    print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
+                    if not rota["destinos"]:
+                        rota["ativa"] = False
+                        if rota["origem"] != "LOCAL":
+                            enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": fluxo}, rota["origem"])
+                        print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
+                    else:
+                        print(f"[*] Consumo local de {fluxo} desativado (a manter rota ativa para {len(rota['destinos'])} destino(s) a jusante).")
         elif acao == "play":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            fluxos_em_play.add(fluxo)  # Regista que este nó está a consumir o vídeo localmente
             with rotas_lock:
+                fluxos_em_play.add(fluxo)  # Regista que este nó está a consumir o vídeo localmente
                 if fluxo in tabela_rotas:
                     tabela_rotas[fluxo]["ativa"] = True
                     if tabela_rotas[fluxo]["origem"] != "LOCAL":
                         enviar_para_vizinho({"tipo": "ATIVA", "fluxo": fluxo}, tabela_rotas[fluxo]["origem"])
             print(f"[*] A abrir VideoClient local na porta 25001 para o fluxo {fluxo}...")
             try:
+                # Garante DISPLAY=:0 por defeito para ambientes de contentores CORE em Linux
+                env = os.environ.copy()
+                if "DISPLAY" not in env:
+                    env["DISPLAY"] = ":0"
                 # Passamos a porta local 25001 como argumento para o cliente de vídeo
-                subprocess.Popen([sys.executable, "video_client.py", fluxo, "25001"])
+                proc = subprocess.Popen([sys.executable, "video_client.py", fluxo, "25001"], env=env)
+                threading.Thread(target=_aguardar_fecho_player, args=(proc, fluxo), daemon=True).start()
             except Exception as e:
                 print(f"[-] Erro ao abrir video_client.py: {e}")
         elif acao == "trace":

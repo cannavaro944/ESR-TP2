@@ -72,6 +72,7 @@ class VideoClient:
     ----------
     stream_id   : Identificador do fluxo a receber (ex: "S1_V1").
     listen_host : Endereço IP local a escutar (padrão: "" = todas as interfaces).
+    listen_port : Porta UDP local a escutar (padrão: VIDEO_PORT = 25000).
     on_close    : Callback opcional invocado com (stream_id) ao fechar a janela.
                   Pode ser usado para enviar mensagem LEAVE ao plano de controlo.
     """
@@ -80,10 +81,12 @@ class VideoClient:
         self,
         stream_id: str,
         listen_host: str = "",
+        listen_port: int = VIDEO_PORT,
         on_close: Optional[Callable[[str], None]] = None
     ):
         self.stream_id   = stream_id
         self.listen_host = listen_host
+        self.listen_port = listen_port
         self._on_close   = on_close
 
         # Contadores de estatísticas
@@ -150,10 +153,10 @@ class VideoClient:
                 pass
 
         self._sock.settimeout(SOCKET_TIMEOUT)
-        self._sock.bind((self.listen_host, VIDEO_PORT))
+        self._sock.bind((self.listen_host, self.listen_port))
         logger.info(
             "VideoClient [%s]: socket ligado à porta %d.",
-            self.stream_id, VIDEO_PORT
+            self.stream_id, self.listen_port
         )
 
         # Lançar thread de escuta (daemon: termina com o processo)
@@ -380,6 +383,20 @@ def main():
         help='Identificador do stream a receber (ex: "S1_V1")'
     )
     parser.add_argument(
+        "port",
+        nargs="?",
+        type=int,
+        default=VIDEO_PORT,
+        help=f"Porta UDP a escutar (padrão: {VIDEO_PORT})"
+    )
+    parser.add_argument(
+        "--port",
+        dest="port_flag",
+        type=int,
+        default=None,
+        help=f"Porta UDP alternativa (sobrepõe o argumento posicional)"
+    )
+    parser.add_argument(
         "--host",
         default="",
         help="Interface local a escutar (padrão: todas as interfaces)"
@@ -392,6 +409,7 @@ def main():
     )
 
     args = parser.parse_args()
+    listen_port = args.port_flag if args.port_flag is not None else args.port
 
     # Configurar logging
     logging.basicConfig(
@@ -403,6 +421,7 @@ def main():
     client = VideoClient(
         stream_id=args.stream_id,
         listen_host=args.host,
+        listen_port=listen_port,
         on_close=_default_on_close
     )
 
