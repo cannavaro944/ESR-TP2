@@ -12,15 +12,27 @@ tabela_rotas = {}
 vizinhos_ativos = {}
 atraso_vizinhos = {}      # [Elemento 1] Guarda o atraso em ms medido via PING/PONG
 fluxos_locais = {}        # Guarda os fluxos anunciados por este servidor (e o seu seq)
+fluxos_em_play = set()    # [Novo] Guarda os fluxos que este próprio nó está a assistir
 meu_id = ""
 
 
 def obter_destinos_ativos(fluxo):
-    """[Elemento 3 - Plano de Dados] Devolve cópia rasa dos IPs de destinos ativos para o fluxo."""
+    """
+    [Elemento 2 e 3] Devolve lista de tuplos (IP, Porta) para o Forwarder enviar os pacotes UDP.
+    Resolve o conflito de portas separando o tráfego de reencaminhamento do tráfego local.
+    """
+    destinos_finais = []
     with rotas_lock:
         if fluxo in tabela_rotas and tabela_rotas[fluxo].get("ativa", False):
-            return list(tabela_rotas[fluxo].get("destinos", set()))
-        return []
+            # 1. Adiciona os vizinhos que pediram o vídeo (porta 25000 do Overlay)
+            for ip in tabela_rotas[fluxo].get("destinos", set()):
+                destinos_finais.append((ip, 25000))
+                
+    # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta 25001
+    if fluxo in fluxos_em_play:
+        destinos_finais.append(("127.0.0.1", 25001))
+        
+    return destinos_finais
 
 
 def handle_incoming_connections(listen_port):
@@ -148,7 +160,6 @@ def processar_anuncio(msg, ip_vizinho):
         if rota_atual and rota_atual["origem"] == "LOCAL":
             return
 
-        # Aceita se for fluxo novo, se for uma ronda de anúncio mais recente (seq maior), ou se for caminho mais rápido na mesma ronda
         if (rota_atual is None or 
             seq > rota_atual.get("seq", 0) or 
             (seq == rota_atual.get("seq", 0) and nova_metrica < rota_atual["metrica"])):
@@ -167,7 +178,6 @@ def processar_anuncio(msg, ip_vizinho):
             }
             atualizou_rota = True
             
-            # Se a rota já estava ativa mas a origem mudou (ex: falha do nó anterior), envia ATIVA para a nova origem
             if estado_atual and origem_antiga != ip_vizinho:
                 re_ativar_nova_origem = True
                 print(f"[RE-ROTEAMENTO] Rota para '{id_fluxo}' transferida de {origem_antiga} para {ip_vizinho}!")
@@ -204,7 +214,7 @@ def processar_desativacao(msg, ip_vizinho):
             rota = tabela_rotas[id_fluxo]
             if ip_vizinho in rota["destinos"]:
                 rota["destinos"].discard(ip_vizinho)
-            if not rota["destinos"]:
+            if not rota["destinos"] and fluxo not in fluxos_em_play:
                 rota["ativa"] = False
                 print(f"\n[*] Rota {id_fluxo} DESATIVADA (sem destinos restantes).")
                 if rota["origem"] != "LOCAL":
@@ -228,12 +238,14 @@ def processar_trace(msg, ip_vizinho):
     caminho_str = " -> ".join(caminho)
     print(f"\n[TRACE-LOG] Fluxo: {id_fluxo} | Caminho acumulado: {caminho_str} | Atraso até aqui: {metrica_local} ms | Rota Ativa: {ativa}")
 
-    if destinos:
+    if destinos or id_fluxo in fluxos_em_play:
         msg_seguinte = {"tipo": "TRACE", "fluxo": id_fluxo, "caminho": caminho}
         for ip_dest in destinos:
             enviar_para_vizinho(msg_seguinte, ip_dest)
+        if not destinos and id_fluxo in fluxos_em_play:
+             print(f"[TRACE-FIM] O teste de percurso para '{id_fluxo}' chegou ao destino final ({meu_id})! Percurso: {caminho_str}")
     else:
-        print(f"[TRACE-FIM] O teste de percurso para '{id_fluxo}' chegou ao destino final ({meu_id})! Percurso completo: {caminho_str}")
+        print(f"[TRACE-FIM] O teste de percurso para '{id_fluxo}' chegou ao destino final ({meu_id})! Percurso: {caminho_str}")
 
 
 def reenviar_a_todos_exceto(msg, ip_ignorar):
@@ -353,6 +365,7 @@ if __name__ == "__main__":
                     print(f"[*] Pedido de ATIVA para {fluxo} enviado a {tabela_rotas[fluxo]['origem']}.")
         elif acao == "desativar":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
+            fluxos_em_play.discard(fluxo)  # Remove da reprodução local, se estivesse
             with rotas_lock:
                 if fluxo in tabela_rotas:
                     rota = tabela_rotas[fluxo]
@@ -363,15 +376,16 @@ if __name__ == "__main__":
                     print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
         elif acao == "play":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            # Primeiro ativa o fluxo para que os dados cheguem a este nó
+            fluxos_em_play.add(fluxo)  # Regista que este nó está a consumir o vídeo localmente
             with rotas_lock:
                 if fluxo in tabela_rotas:
                     tabela_rotas[fluxo]["ativa"] = True
                     if tabela_rotas[fluxo]["origem"] != "LOCAL":
                         enviar_para_vizinho({"tipo": "ATIVA", "fluxo": fluxo}, tabela_rotas[fluxo]["origem"])
-            print(f"[*] A abrir VideoClient para o fluxo {fluxo}...")
+            print(f"[*] A abrir VideoClient local na porta 25001 para o fluxo {fluxo}...")
             try:
-                subprocess.Popen([sys.executable, "video_client.py", fluxo])
+                # Passamos a porta local 25001 como argumento para o cliente de vídeo
+                subprocess.Popen([sys.executable, "video_client.py", fluxo, "25001"])
             except Exception as e:
                 print(f"[-] Erro ao abrir video_client.py: {e}")
         elif acao == "trace":
@@ -379,10 +393,10 @@ if __name__ == "__main__":
             with rotas_lock:
                 rota = tabela_rotas.get(fluxo)
                 destinos = list(rota["destinos"]) if rota else []
-            if destinos:
+            if destinos or fluxo in fluxos_em_play:
                 for ip_dest in destinos:
                     enviar_para_vizinho({"tipo": "TRACE", "fluxo": fluxo, "caminho": [meu_id]}, ip_dest)
-                print(f"[*] Mensagem TRACE de teste de percurso enviada para os destinos ativos de '{fluxo}'.")
+                print(f"[*] Mensagem TRACE de teste de percurso enviada para os destinos de '{fluxo}'.")
             else:
                 print(f"[-] Nenhum destino ativo para '{fluxo}'. Ativa primeiro a rota num cliente!")
         elif acao == "sair":
