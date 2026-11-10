@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+*.log
+.DS_Store
+.idea/
+.vscode/
+test_video_*.Mjpeg
+parte dos colega 1 e 2/
+*.pdf
