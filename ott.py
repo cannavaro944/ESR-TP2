@@ -28,9 +28,9 @@ def obter_destinos_ativos(fluxo):
             for ip in tabela_rotas[fluxo].get("destinos", set()):
                 destinos_finais.append((ip, 25000))
                 
-    # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta 25001
+    # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta oficial
     if fluxo in fluxos_em_play:
-        destinos_finais.append(("127.0.0.1", 25001))
+        destinos_finais.append("LOCAL_PLAY")
         
     return destinos_finais
 
@@ -385,7 +385,7 @@ if __name__ == "__main__":
             print(f"[*] A abrir VideoClient local na porta 25001 para o fluxo {fluxo}...")
             try:
                 # Passamos a porta local 25001 como argumento para o cliente de vídeo
-                subprocess.Popen([sys.executable, "video_client.py", fluxo, "25001"])
+                subprocess.Popen([sys.executable, "video_client.py", fluxo])
             except Exception as e:
                 print(f"[-] Erro ao abrir video_client.py: {e}")
         elif acao == "trace":
