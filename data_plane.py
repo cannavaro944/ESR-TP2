@@ -204,7 +204,7 @@ class OverlayForwarder:
                 # ── Replicar pacote para cada destino ─────────────────────────
                 for dest_ip in destinations:
                     try:
-                        send_sock.sendto(data, (dest_ip, VIDEO_PORT))
+                        send_sock.sendto(data, dest_ip)
                     except OSError as exc:
                         logger.warning(
                             "OverlayForwarder: erro ao enviar para %s:%d — %s",
