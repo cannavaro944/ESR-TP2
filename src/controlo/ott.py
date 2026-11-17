@@ -374,15 +374,16 @@ if __name__ == "__main__":
                     print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
         elif acao == "play":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            fluxos_em_play.add(fluxo)  # Regista que este nó está a consumir o vídeo localmente
+            fluxos_em_play.add(fluxo)
+            if forwarder:
+                forwarder.stop()
             with rotas_lock:
                 if fluxo in tabela_rotas:
                     tabela_rotas[fluxo]["ativa"] = True
                     if tabela_rotas[fluxo]["origem"] != "LOCAL":
                         enviar_para_vizinho({"tipo": "ATIVA", "fluxo": fluxo}, tabela_rotas[fluxo]["origem"])
-            print(f"[*] A abrir VideoClient local na porta 25001 para o fluxo {fluxo}...")
+            print(f"[*] A abrir VideoClient local na porta 25000 para o fluxo {fluxo}...")
             try:
-                # Passamos a porta local 25001 como argumento para o cliente de vídeo
                 subprocess.Popen([sys.executable, "-m", "src.dados.video_client", fluxo])
             except Exception as e:
                 print(f"[-] Erro ao abrir o cliente de vídeo: {e}")
