@@ -232,11 +232,13 @@ class VideoClient:
                 self._frames_received += 1
                 self._bytes_received += len(data)
 
-                # ── Converter payload JPEG → ImageTk para a GUI ───────────────
+                # ── Descodificar e redimensionar JPEG fora da thread GUI ─────
+                # A criação de PhotoImage fica exclusivamente em
+                # _poll_frame_queue(), na thread principal do Tkinter.
                 try:
                     img = Image.open(io.BytesIO(pkt.payload))
+                    img.load()
                     img = img.resize((DEFAULT_WIDTH, DEFAULT_HEIGHT), Image.LANCZOS)
-                    photo = ImageTk.PhotoImage(img)
                 except Exception as exc:
                     logger.warning(
                         "VideoClient [%s]: erro a descodificar imagem JPEG: %s",
@@ -247,7 +249,7 @@ class VideoClient:
                 # ── Colocar na queue (descarta se a GUI está atrasada) ─────────
                 try:
                     # put_nowait: não bloqueia; descarta o frame se a queue estiver cheia
-                    self._frame_queue.put_nowait((photo, pkt.seq_num))
+                    self._frame_queue.put_nowait((img, pkt.seq_num))
                 except queue.Full:
                     # GUI está ocupada; descartar frame mais antigo e inserir novo
                     try:
@@ -255,7 +257,7 @@ class VideoClient:
                     except queue.Empty:
                         pass
                     try:
-                        self._frame_queue.put_nowait((photo, pkt.seq_num))
+                        self._frame_queue.put_nowait((img, pkt.seq_num))
                     except queue.Full:
                         pass
 
@@ -283,7 +285,10 @@ class VideoClient:
         Chamado periodicamente pelo event loop Tkinter via after().
         """
         try:
-            photo, seq_num = self._frame_queue.get_nowait()
+            img, seq_num = self._frame_queue.get_nowait()
+
+            # PhotoImage só pode ser criado na thread principal do Tkinter.
+            photo = ImageTk.PhotoImage(img)
 
             # Atualizar imagem no Label
             # NOTA: é necessário guardar referência à imagem para evitar garbage

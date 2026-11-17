@@ -16,6 +16,12 @@ fluxos_em_play = set()    # [Novo] Guarda os fluxos que este próprio nó está 
 meu_id = ""
 
 
+def log_seguro(texto):
+    """Escreve um log de uma thread sem destruir o prompt interativo."""
+    sys.stdout.write(f"\r\033[K{texto}\n[{meu_id}]> ")
+    sys.stdout.flush()
+
+
 def obter_destinos_ativos(fluxo):
     """
     [Elemento 2 e 3] Devolve lista de IPs (strings) para o Forwarder enviar os pacotes UDP.
@@ -152,6 +158,8 @@ def processar_anuncio(msg, ip_vizinho):
     
     atualizou_rota = False
     re_ativar_nova_origem = False
+    rota_descoberta = False
+    origem_alterada = False
 
     with rotas_lock:
         rota_atual = tabela_rotas.get(id_fluxo)
@@ -165,6 +173,8 @@ def processar_anuncio(msg, ip_vizinho):
             destinos_atuais = rota_atual["destinos"] if rota_atual else set()
             estado_atual = rota_atual["ativa"] if rota_atual else False
             origem_antiga = rota_atual["origem"] if rota_atual else None
+            rota_descoberta = rota_atual is None
+            origem_alterada = origem_antiga is not None and origem_antiga != ip_vizinho
 
             tabela_rotas[id_fluxo] = {
                 "servidor": servidor_id,
@@ -176,11 +186,19 @@ def processar_anuncio(msg, ip_vizinho):
             }
             atualizou_rota = True
             
-            if estado_atual and origem_antiga != ip_vizinho:
+            if estado_atual and origem_alterada:
                 re_ativar_nova_origem = True
-                print(f"[RE-ROTEAMENTO] Rota para '{id_fluxo}' transferida de {origem_antiga} para {ip_vizinho}!")
 
-            print(f"[*] Rota Atualizada: {id_fluxo} via {ip_vizinho} (Atraso: {nova_metrica} ms | Ronda: {seq})")
+            if rota_descoberta:
+                log_seguro(
+                    f"[*] Rota descoberta: {id_fluxo} via {ip_vizinho} "
+                    f"(Atraso: {nova_metrica} ms | Ronda: {seq})"
+                )
+            elif origem_alterada:
+                log_seguro(
+                    f"[RE-ROTEAMENTO] Rota para '{id_fluxo}' transferida de "
+                    f"{origem_antiga} para {ip_vizinho}!"
+                )
             
     if re_ativar_nova_origem:
         enviar_para_vizinho({"tipo": "ATIVA", "fluxo": id_fluxo}, ip_vizinho)
