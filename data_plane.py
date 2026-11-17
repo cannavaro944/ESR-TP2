@@ -461,7 +461,7 @@ class StreamServer:
                 # ── Enviar para cada destino ───────────────────────────────────
                 for dest_ip in destinations:
                     try:
-                        self._send_sock.sendto(wire_data, (dest_ip, VIDEO_PORT))
+                        self._send_sock.sendto(wire_data, dest_ip)
                     except OSError as exc:
                         logger.warning(
                             "StreamServer [%s]: erro ao enviar para %s -- %s",
