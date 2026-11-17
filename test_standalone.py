@@ -365,8 +365,8 @@ def test_full_pipeline():
     # ── Tabela de rotas mock ──────────────────────────────────────────────────
     # O servidor envia diretamente para o recetor de teste
     route_table = MockRouteTable({
-        "S1_V1": [LOCALHOST],
-        "S1_V2": [LOCALHOST],
+        "S1_V1": [(LOCALHOST, TEST_RECV_PORT)],
+        "S1_V2": [(LOCALHOST, TEST_RECV_PORT)],
     })
 
     # ── Recetor de frames (escuta em TEST_RECV_PORT) ──────────────────────────
@@ -434,7 +434,7 @@ def test_full_pipeline():
                     for dest_ip in destinations:
                         try:
                             # Envia para TEST_RECV_PORT em vez de VIDEO_PORT
-                            self._send_sock.sendto(wire_data, (dest_ip, TEST_RECV_PORT))
+                            self._send_sock.sendto(wire_data, dest_ip)
                         except OSError as exc:
                             logger.warning("[TestStreamServer] Erro sendto: %s", exc)
 
