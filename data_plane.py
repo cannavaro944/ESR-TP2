@@ -204,12 +204,13 @@ class OverlayForwarder:
                 # ── Replicar pacote para cada destino ─────────────────────────
                 for dest_ip in destinations:
                     try:
-                        if dest_ip == "LOCAL_PLAY":
-                            send_sock.sendto(data, ("127.0.0.1", 25001))
-                        else:
-                            send_sock.sendto(data, (dest_ip, VIDEO_PORT))
+                        send_sock.sendto(data, (dest_ip, VIDEO_PORT))
                     except OSError as exc:
-                        pass
+                        logger.warning(
+                            "OverlayForwarder: erro ao enviar para %s:%d — %s",
+                            dest_ip, VIDEO_PORT, exc
+                        )
+
             except OSError:
                 # Socket fechado (stop() foi chamado) ou outro erro de I/O
                 if self._running:
@@ -460,12 +461,12 @@ class StreamServer:
                 # ── Enviar para cada destino ───────────────────────────────────
                 for dest_ip in destinations:
                     try:
-                        if dest_ip == "LOCAL_PLAY":
-                            self._send_sock.sendto(wire_data, ("127.0.0.1", 25001))
-                        else:
-                            self._send_sock.sendto(wire_data, (dest_ip, VIDEO_PORT))
+                        self._send_sock.sendto(wire_data, (dest_ip, VIDEO_PORT))
                     except OSError as exc:
-                        pass
+                        logger.warning(
+                            "StreamServer [%s]: erro ao enviar para %s -- %s",
+                            stream_id, dest_ip, exc
+                        )
 
                 # ── [PONTO 3] Sleep preciso: compensa I/O + rede ──────────────
                 # elapsed inclui: next_frame() + get_packet() + todos os sendto()
@@ -476,4 +477,3 @@ class StreamServer:
         finally:
             video.close()
             logger.debug("StreamServer [%s]: worker terminado.", stream_id)
-
