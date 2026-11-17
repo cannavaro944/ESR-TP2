@@ -17,12 +17,21 @@ meu_id = ""
 
 
 def obter_destinos_ativos(fluxo):
+    """
+    [Elemento 2 e 3] Devolve lista de tuplos (IP, Porta) para o Forwarder enviar os pacotes UDP.
+    Resolve o conflito de portas separando o tráfego de reencaminhamento do tráfego local.
+    """
     destinos_finais = []
     with rotas_lock:
         if fluxo in tabela_rotas and tabela_rotas[fluxo].get("ativa", False):
-            destinos_finais.extend(list(tabela_rotas[fluxo].get("destinos", set())))
+            # 1. Adiciona os vizinhos que pediram o vídeo (porta 25000 do Overlay)
+            for ip in tabela_rotas[fluxo].get("destinos", set()):
+                destinos_finais.append((ip, 25000))
+                
+    # 2. Se este próprio nó estiver a assistir (play), manda uma cópia para o player local na porta 25001
     if fluxo in fluxos_em_play:
-        destinos_finais.append("LOCAL_PLAY")
+        destinos_finais.append(("127.0.0.1", 25001))
+        
     return destinos_finais
 
 
