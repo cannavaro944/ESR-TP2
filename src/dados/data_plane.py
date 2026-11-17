@@ -27,8 +27,8 @@ import threading
 import time
 from typing import Callable, Dict, List, Optional
 
-from rtp_packet import RtpPacket, SEQ_MAX
-from video_stream import VideoStream, VideoStreamError
+from .rtp_packet import RtpPacket, SEQ_MAX
+from .video_stream import VideoStream, VideoStreamError
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Configuração de logging

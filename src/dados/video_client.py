@@ -5,11 +5,11 @@ Recebe frames de vídeo via UDP/RTP e apresenta-os em tempo real
 numa janela Tkinter.
 
 Uso:
-    python video_client.py <stream_id> [--host HOST] [--callback]
+    python -m src.dados.video_client <stream_id> [--host HOST]
 
 Exemplos:
-    python video_client.py S1_V1
-    python video_client.py S1_V2 --host 10.0.0.1
+    python -m src.dados.video_client S1_V1
+    python -m src.dados.video_client S1_V2 --host 10.0.0.1
 
 Arquitetura interna:
     - Thread principal  → loop Tkinter (GUI)
@@ -43,8 +43,8 @@ except ImportError:
     )
     sys.exit(1)
 
-from rtp_packet import RtpPacket
-from data_plane import VIDEO_PORT, RECV_BUFFER_SIZE
+from .rtp_packet import RtpPacket
+from .data_plane import VIDEO_PORT, RECV_BUFFER_SIZE
 
 # ──────────────────────────────────────────────────────────────────────────────
 logger = logging.getLogger(__name__)

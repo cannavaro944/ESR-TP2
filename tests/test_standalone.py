@@ -50,9 +50,9 @@ logger = logging.getLogger("test_standalone")
 # Importar módulos do plano de dados
 # ──────────────────────────────────────────────────────────────────────────────
 try:
-    from rtp_packet import RtpPacket
-    from video_stream import VideoStream, VideoStreamError
-    from data_plane import OverlayForwarder, StreamServer, VIDEO_PORT, RECV_BUFFER_SIZE
+    from src.dados.rtp_packet import RtpPacket
+    from src.dados.video_stream import VideoStream, VideoStreamError
+    from src.dados.data_plane import OverlayForwarder, StreamServer, VIDEO_PORT, RECV_BUFFER_SIZE
 except ImportError as exc:
     print(f"[ERRO] Não foi possível importar módulos do plano de dados: {exc}")
     print("       Certifique-se de que rtp_packet.py, video_stream.py e data_plane.py")
@@ -389,8 +389,8 @@ def test_full_pipeline():
               - Ponto 4: list() defensivo na consulta de destinos
             """
             import time
-            from rtp_packet import RtpPacket, SEQ_MAX
-            from video_stream import VideoStream, VideoStreamError
+            from src.dados.rtp_packet import RtpPacket, SEQ_MAX
+            from src.dados.video_stream import VideoStream, VideoStreamError
 
             frame_interval = 1.0 / fps
             seq_num = 0
@@ -621,17 +621,17 @@ def test_checklist_armadilhas():
     print("\n[TESTE 6] Checklist das 5 armadilhas tecnicas...")
 
     # ── Ponto 1: Buffer UDP >= 65536 ─────────────────────────────────────────
-    from data_plane import RECV_BUFFER_SIZE
+    from src.dados.data_plane import RECV_BUFFER_SIZE
     assert RECV_BUFFER_SIZE >= 65536, \
         f"RECV_BUFFER_SIZE={RECV_BUFFER_SIZE} < 65536 (frames JPEG podem ser truncados)"
     # Verificar que o VideoClient importa e usa o mesmo valor
-    import video_client as vc_mod
+    from src.dados import video_client as vc_mod
     assert vc_mod.RECV_BUFFER_SIZE >= 65536, \
         f"video_client importa RECV_BUFFER_SIZE={vc_mod.RECV_BUFFER_SIZE} < 65536"
     print(f"  [OK] Ponto 1: RECV_BUFFER_SIZE = {RECV_BUFFER_SIZE} bytes >= 65536")
 
     # ── Ponto 2: SO_REUSEADDR aplicado antes do bind ──────────────────────────
-    import data_plane as dp_mod
+    from src.dados import data_plane as dp_mod
     src = inspect.getsource(dp_mod._create_udp_socket)
     assert "SO_REUSEADDR" in src, \
         "_create_udp_socket() nao aplica SO_REUSEADDR antes do bind"

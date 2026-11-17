@@ -8,8 +8,8 @@ e os módulos de transmissão/reencaminhamento do Plano de Dados (data_plane.py)
 import sys
 import threading
 import time
-import ott
-from data_plane import OverlayForwarder, StreamServer
+from src.controlo import ott
+from src.dados.data_plane import OverlayForwarder, StreamServer
 
 def test_integration():
     print("=== A testar integração ott.py <-> data_plane.py ===")

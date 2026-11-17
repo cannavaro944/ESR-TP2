@@ -5,7 +5,7 @@ import threading
 import time
 import subprocess
 
-from data_plane import OverlayForwarder, StreamServer
+from src.dados.data_plane import OverlayForwarder, StreamServer
 
 rotas_lock = threading.Lock()
 tabela_rotas = {}
@@ -212,7 +212,7 @@ def processar_desativacao(msg, ip_vizinho):
             rota = tabela_rotas[id_fluxo]
             if ip_vizinho in rota["destinos"]:
                 rota["destinos"].discard(ip_vizinho)
-            if not rota["destinos"] and fluxo not in fluxos_em_play:
+            if not rota["destinos"] and id_fluxo not in fluxos_em_play:
                 rota["ativa"] = False
                 print(f"\n[*] Rota {id_fluxo} DESATIVADA (sem destinos restantes).")
                 if rota["origem"] != "LOCAL":
@@ -267,7 +267,7 @@ def enviar_para_vizinho(msg, ip_destino):
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print("Uso: python3 ott.py <node_id> <bootstrapper_ip> <listen_port>")
+        print("Uso: python3 -m src.controlo.ott <node_id> <bootstrapper_ip> <listen_port>")
         sys.exit(1)
         
     meu_id = sys.argv[1]
@@ -383,9 +383,9 @@ if __name__ == "__main__":
             print(f"[*] A abrir VideoClient local na porta 25001 para o fluxo {fluxo}...")
             try:
                 # Passamos a porta local 25001 como argumento para o cliente de vídeo
-                subprocess.Popen([sys.executable, "video_client.py", fluxo])
+                subprocess.Popen([sys.executable, "-m", "src.dados.video_client", fluxo])
             except Exception as e:
-                print(f"[-] Erro ao abrir video_client.py: {e}")
+                print(f"[-] Erro ao abrir o cliente de vídeo: {e}")
         elif acao == "trace":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
             with rotas_lock:

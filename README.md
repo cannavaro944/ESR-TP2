@@ -26,16 +26,16 @@ O sistema divide-se em dois planos coordenados:
 
 | Ficheiro | Descrição |
 |---|---|
-| `server.py` | Bootstrapper TCP (porta 9000) baseado em `topology.conf` |
-| `topology.conf` | Ficheiro JSON de topologia e adjacências entre nós |
-| `topology_tp2.xml` | Cenário do emulador de rede CORE |
-| `ott.py` | Nó do Overlay (gestão de conexões TCP, rotas e plano de dados) |
-| `rtp_packet.py` | Classe `RtpPacket` com codificação e descodificação rápida |
-| `video_stream.py` | Classe `VideoStream` para leitura de ficheiros MJPEG em loop |
-| `data_plane.py` | Classes `OverlayForwarder` e `StreamServer` |
-| `video_client.py` | Interface gráfica do cliente de visualização de vídeo |
-| `test_standalone.py` | Suite de testes unitários e de integração do plano de dados |
-| `test_integration_ott.py` | Teste de integração entre `ott.py` e `data_plane.py` |
+| `src/controlo/server.py` | Bootstrapper TCP (porta 9000) baseado em `config/topology.conf` |
+| `config/topology.conf` | Ficheiro JSON de topologia e adjacências entre nós |
+| `topologias/topology_tp2.xml` | Cenário do emulador de rede CORE |
+| `src/controlo/ott.py` | Nó do Overlay (gestão de conexões TCP, rotas e plano de dados) |
+| `src/dados/rtp_packet.py` | Classe `RtpPacket` com codificação e descodificação rápida |
+| `src/dados/video_stream.py` | Classe `VideoStream` para leitura de ficheiros MJPEG em loop |
+| `src/dados/data_plane.py` | Classes `OverlayForwarder` e `StreamServer` |
+| `src/dados/video_client.py` | Interface gráfica do cliente de visualização de vídeo |
+| `tests/test_standalone.py` | Suite de testes unitários e de integração do plano de dados |
+| `tests/test_integration_ott.py` | Teste de integração entre `ott.py` e `data_plane.py` |
 
 ---
 
@@ -50,17 +50,17 @@ sudo apt-get install python3-tk
 
 ### 1. Iniciar o Bootstrapper (no nó servidor central / S1)
 ```bash
-python3 server.py
+python3 -m src.controlo.server
 ```
 
 ### 2. Iniciar um Nó Overlay (`ott.py`)
 Em cada nó do CORE (ou terminal):
 ```bash
-python3 ott.py <node_id> <bootstrapper_ip> <listen_port>
+python3 -m src.controlo.ott <node_id> <bootstrapper_ip> <listen_port>
 ```
 *Exemplo no nó S1:*
 ```bash
-python3 ott.py S1 10.0.19.1 9001
+python3 -m src.controlo.ott S1 10.0.19.1 9001
 ```
 
 ### 3. Comandos Interativos do `ott.py`
@@ -77,7 +77,7 @@ No prompt `[<node_id>]>`:
 
 ### 4. Executar o Cliente de Vídeo Standalone
 ```bash
-python3 video_client.py <stream_id>
+python3 -m src.dados.video_client <stream_id>
 ```
 
 ---
@@ -86,10 +86,10 @@ python3 video_client.py <stream_id>
 
 Executar a suite completa do Plano de Dados:
 ```bash
-python test_standalone.py
+python -m tests.test_standalone
 ```
 
 Executar o teste de integração Controlo + Dados:
 ```bash
-python test_integration_ott.py
+python -m tests.test_integration_ott
 ```

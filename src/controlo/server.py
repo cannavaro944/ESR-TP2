@@ -1,11 +1,13 @@
 import socket
 import json
+from pathlib import Path
 
 HOST = '0.0.0.0'
 PORT = 9000
 
 # Carregar o ficheiro de configuração do overlay
-with open('topology.conf', 'r') as f:
+CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "topology.conf"
+with CONFIG_PATH.open("r", encoding="utf-8") as f:
     topology = json.load(f)
 
 server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
