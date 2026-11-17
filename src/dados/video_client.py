@@ -80,11 +80,13 @@ class VideoClient:
         self,
         stream_id: str,
         listen_host: str = "",
+        listen_port: int = VIDEO_PORT,
         on_close: Optional[Callable[[str], None]] = None
     ):
         self.stream_id   = stream_id
         self.listen_host = listen_host
         self._on_close   = on_close
+        self.listen_port = listen_port
 
         # Contadores de estatísticas
         self._frames_received = 0
@@ -390,6 +392,12 @@ def main():
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Nível de logging (padrão: INFO)"
     )
+    parser.add_argument(
+    "--port",
+    type=int,
+    default=VIDEO_PORT,
+    help="Porta UDP local a escutar (padrão: 25000)"
+    )
 
     args = parser.parse_args()
 
@@ -400,6 +408,13 @@ def main():
         datefmt="%H:%M:%S"
     )
 
+    client = VideoClient(
+    stream_id=args.stream_id,
+    listen_host=args.host,
+    listen_port=args.port,
+    on_close=_default_on_close
+    )
+    
     client = VideoClient(
         stream_id=args.stream_id,
         listen_host=args.host,
