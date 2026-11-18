@@ -152,10 +152,10 @@ class VideoClient:
                 pass
 
         self._sock.settimeout(SOCKET_TIMEOUT)
-        self._sock.bind((self.listen_host, VIDEO_PORT))
+        self._sock.bind((self.listen_host, self.listen_port))
         logger.info(
             "VideoClient [%s]: socket ligado à porta %d.",
-            self.stream_id, VIDEO_PORT
+            self.stream_id, self.listen_port
         )
 
         # Lançar thread de escuta (daemon: termina com o processo)
@@ -288,7 +288,7 @@ class VideoClient:
             img, seq_num = self._frame_queue.get_nowait()
 
             # PhotoImage só pode ser criado na thread principal do Tkinter.
-            photo = ImageTk.PhotoImage(img)
+            photo = ImageTk.PhotoImage(img, master=self._root)
 
             # Atualizar imagem no Label
             # NOTA: é necessário guardar referência à imagem para evitar garbage
@@ -414,15 +414,9 @@ def main():
     )
 
     client = VideoClient(
-    stream_id=args.stream_id,
-    listen_host=args.host,
-    listen_port=args.port,
-    on_close=_default_on_close
-    )
-    
-    client = VideoClient(
         stream_id=args.stream_id,
         listen_host=args.host,
+        listen_port=args.port,
         on_close=_default_on_close
     )
 

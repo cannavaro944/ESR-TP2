@@ -1,3 +1,4 @@
+import os
 import socket
 import json
 import sys
@@ -32,11 +33,11 @@ def obter_destinos_ativos(fluxo):
             # 1. Adiciona os IPs dos vizinhos que pediram o vídeo
             for ip in tabela_rotas[fluxo].get("destinos", set()):
                 destinos_finais.append(ip)
-                
-    # 2. Se este próprio nó estiver a assistir (play), adiciona o IP local
-    if fluxo in fluxos_em_play:
-        destinos_finais.append("127.0.0.1")
-        
+
+        # 2. Se este próprio nó estiver a assistir (play), adiciona o IP local
+        if fluxo in fluxos_em_play:
+            destinos_finais.append("127.0.0.1")
+
     return destinos_finais
 
 def handle_incoming_connections(listen_port):
@@ -99,16 +100,21 @@ def handle_peer(conn, addr):
 
 def limpar_rotas_vizinho_falhado(ip_morto):
     """[Elementos 1 e 2] Remove o vizinho caído dos destinos e invalida rotas onde ele era a origem."""
+    desativar_a_montante = []
     with rotas_lock:
         for id_fluxo, rota in list(tabela_rotas.items()):
             if ip_morto in rota["destinos"]:
                 rota["destinos"].remove(ip_morto)
                 print(f"[*] Vizinho caído {ip_morto} removido dos destinos do fluxo {id_fluxo}.")
-                if not rota["destinos"] and rota["origem"] != "LOCAL":
+                if not rota["destinos"] and id_fluxo not in fluxos_em_play and rota["origem"] != "LOCAL":
                     rota["ativa"] = False
+                    if rota["origem"] != ip_morto:
+                        desativar_a_montante.append((id_fluxo, rota["origem"]))
             if rota["origem"] == ip_morto:
                 print(f"[!] A origem ({ip_morto}) do fluxo {id_fluxo} falhou! A aguardar rota alternativa...")
                 rota["metrica"] = float('inf')
+    for id_fluxo, ip_orig in desativar_a_montante:
+        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, ip_orig)
 
 
 def monitorizar_latencia_vizinhos():
@@ -237,6 +243,29 @@ def processar_desativacao(msg, ip_vizinho):
                     enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, rota["origem"])
 
 
+def _aguardar_fecho_player(proc, id_fluxo, forwarder_ref=None):
+    """[Elemento 3] Aguarda que a janela do VideoClient feche e envia DESATIVA se necessário."""
+    proc.wait()
+    enviar_desativa = None
+    with rotas_lock:
+        if id_fluxo in fluxos_em_play:
+            fluxos_em_play.discard(id_fluxo)
+            if id_fluxo in tabela_rotas:
+                rota = tabela_rotas[id_fluxo]
+                if not rota["destinos"]:
+                    rota["ativa"] = False
+                    log_seguro(f"[*] VideoClient fechado. Rota {id_fluxo} DESATIVADA (sem destinos restantes).")
+                    if rota["origem"] != "LOCAL":
+                        enviar_desativa = rota["origem"]
+        if not fluxos_em_play and forwarder_ref is not None and not forwarder_ref._running:
+            try:
+                forwarder_ref.start()
+            except OSError:
+                pass
+    if enviar_desativa:
+        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, enviar_desativa)
+
+
 def processar_trace(msg, ip_vizinho):
     """[Etapa 3] Encaminha mensagem de teste pelas rotas, regista log e acumula o caminho."""
     id_fluxo = msg["fluxo"]
@@ -283,34 +312,124 @@ def enviar_para_vizinho(msg, ip_destino):
             pass
 
 
+def _iniciar_stream_local(stream_server, fluxo, ficheiro, fps=20.0):
+    """[Elemento 2 & 3] Regista, inicia o StreamServer e anuncia um fluxo local."""
+    fluxos_locais[fluxo] = fluxos_locais.get(fluxo, 0) + 1
+    seq = fluxos_locais[fluxo]
+    with rotas_lock:
+        if fluxo not in tabela_rotas:
+            tabela_rotas[fluxo] = {
+                "servidor": meu_id,
+                "origem": "LOCAL",
+                "metrica": 0.0,
+                "destinos": set(),
+                "ativa": False,
+                "seq": seq,
+            }
+    stream_server.start_stream(fluxo, ficheiro, fps=float(fps))
+    print(f"[*] Stream {fluxo} pronto para transmissão a {fps} fps a partir de {ficheiro}.")
+    reenviar_a_todos_exceto(
+        {"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq},
+        None,
+    )
+
+
+def _executar_play(fluxo, forwarder):
+    """[Elemento 3] Ativa a rota e lança o cliente gráfico VideoClient na porta 25000."""
+    with rotas_lock:
+        fluxos_em_play.add(fluxo)
+        if forwarder and forwarder._running:
+            forwarder.stop()
+        if fluxo in tabela_rotas:
+            tabela_rotas[fluxo]["ativa"] = True
+            if tabela_rotas[fluxo]["origem"] != "LOCAL":
+                enviar_para_vizinho({"tipo": "ATIVA", "fluxo": fluxo}, tabela_rotas[fluxo]["origem"])
+    print(f"[*] A abrir VideoClient local na porta 25000 para o fluxo {fluxo}...")
+    env = os.environ.copy()
+    if "DISPLAY" not in env:
+        env["DISPLAY"] = ":0"
+    proc = subprocess.Popen([sys.executable, "-m", "src.dados.video_client", fluxo], env=env)
+    threading.Thread(target=_aguardar_fecho_player, args=(proc, fluxo, forwarder), daemon=True).start()
+
+
+def _aguardar_rota_e_play(fluxo, forwarder, timeout_s=30.0):
+    """Aguarda pelo anúncio de rota do fluxo e inicia play automaticamente (--play)."""
+    limite = time.monotonic() + timeout_s
+    while time.monotonic() < limite:
+        with rotas_lock:
+            existe = fluxo in tabela_rotas
+        if existe:
+            try:
+                _executar_play(fluxo, forwarder)
+            except Exception as exc:
+                print(f"[-] Erro ao abrir o cliente de vídeo (--play {fluxo}): {exc}")
+            return
+        time.sleep(0.3)
+    print(f"[-] Timeout ({timeout_s}s): rota para '{fluxo}' não descoberta para --play.")
+
+
 if __name__ == "__main__":
-    if len(sys.argv) < 4:
-        print("Uso: python3 -m src.controlo.ott <node_id> <bootstrapper_ip> <listen_port>")
-        sys.exit(1)
-        
-    meu_id = sys.argv[1]
-    boot_ip = sys.argv[2]
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Nó Overlay (Controlo + Dados) — ESR TP2"
+    )
+    parser.add_argument("node_id", help="Identificador do nó (ex: S1, n10, n20)")
+    parser.add_argument("bootstrapper_ip", help="IP do bootstrapper (porta 9000)")
+    parser.add_argument("listen_port", type=int, help="Porta TCP para ligações entre vizinhos")
+    parser.add_argument(
+        "--daemon",
+        action="store_true",
+        help="Mantém o nó ativo em background mesmo se stdin fechar (ideal para scripts no CORE)",
+    )
+    parser.add_argument(
+        "--stream",
+        action="append",
+        nargs="+",
+        metavar="ARG",
+        help="Inicia automaticamente um stream: --stream <fluxo> <ficheiro.Mjpeg> [fps]",
+    )
+    parser.add_argument(
+        "--play",
+        action="append",
+        metavar="FLUXO",
+        help="Aguarda pela rota do fluxo e abre automaticamente o VideoClient",
+    )
+
+    args = parser.parse_args()
+    meu_id = args.node_id
+    boot_ip = args.bootstrapper_ip
     boot_port = 9000
-    listen_port = int(sys.argv[3])
-    
+    listen_port = args.listen_port
+
     threading.Thread(target=handle_incoming_connections, args=(listen_port,), daemon=True).start()
     threading.Thread(target=monitorizar_latencia_vizinhos, daemon=True).start()
     threading.Thread(target=anuncios_periodicos_servidor, daemon=True).start()
     time.sleep(0.5)
 
     print(f"[*] A contactar o bootstrapper em {boot_ip}:{boot_port}...")
-    bs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    bs_socket.connect((boot_ip, boot_port))
-    bs_socket.sendall(meu_id.encode('utf-8'))
-    
-    response = bs_socket.recv(4096).decode('utf-8')
-    bs_socket.close()
-    
+    tentativas = 20 if args.daemon else 5
+    response = None
+    for tentativa in range(1, tentativas + 1):
+        try:
+            bs_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            bs_socket.settimeout(3.0)
+            bs_socket.connect((boot_ip, boot_port))
+            bs_socket.sendall(meu_id.encode('utf-8'))
+            response = bs_socket.recv(4096).decode('utf-8')
+            bs_socket.close()
+            break
+        except OSError as exc:
+            if tentativa == tentativas:
+                print(f"[-] Falha ao contactar o bootstrapper em {boot_ip}:{boot_port}: {exc}")
+                sys.exit(1)
+            time.sleep(0.5)
+
     neighbors = json.loads(response)
     print(f"[*] Vizinhos atribuídos para {meu_id}: {neighbors}")
-    
+
     conectar_aos_vizinhos(meu_id, neighbors, listen_port)
-    
+
     # [Elemento 3 - Plano de Dados] Iniciar Forwarder UDP (porta 25000) e StreamServer
     try:
         forwarder = OverlayForwarder(obter_destinos_ativos)
@@ -323,11 +442,40 @@ if __name__ == "__main__":
     stream_server = StreamServer(obter_destinos_ativos)
     stream_server.start()
 
+    # Arranque automático de streams passados via --stream
+    if args.stream:
+        time.sleep(0.5)
+        for item in args.stream:
+            if len(item) < 2:
+                print(f"[-] --stream inválido ({item}): uso --stream <fluxo> <ficheiro> [fps]")
+                continue
+            s_fluxo, s_fich = item[0], item[1]
+            s_fps = float(item[2]) if len(item) > 2 else 20.0
+            try:
+                _iniciar_stream_local(stream_server, s_fluxo, s_fich, fps=s_fps)
+            except Exception as e:
+                print(f"[-] Erro ao iniciar --stream {s_fluxo}: {e}")
+
+    # Arranque automático de clientes passados via --play
+    if args.play:
+        for p_fluxo in args.play:
+            threading.Thread(
+                target=_aguardar_rota_e_play,
+                args=(p_fluxo, forwarder),
+                daemon=True,
+            ).start()
+
     print("\nComandos: vizinhos | rotas | anunciar <fluxo> [ficheiro] | stream <fluxo> <ficheiro> [fps] | ativar <fluxo> | desativar <fluxo> | play <fluxo> | trace <fluxo> | sair")
     while True:
         try:
             cmd = input(f"[{meu_id}]> ").strip().split()
         except EOFError:
+            if args.daemon:
+                try:
+                    while True:
+                        time.sleep(1.0)
+                except KeyboardInterrupt:
+                    pass
             break
         if not cmd:
             continue
@@ -342,18 +490,18 @@ if __name__ == "__main__":
         elif acao == "anunciar":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
             ficheiro = cmd[2] if len(cmd) > 2 else None
-            fluxos_locais[fluxo] = fluxos_locais.get(fluxo, 0) + 1
-            seq = fluxos_locais[fluxo]
-            with rotas_lock:
-                tabela_rotas[fluxo] = {"servidor": meu_id, "origem": "LOCAL", "metrica": 0.0, "destinos": set(), "ativa": False, "seq": seq}
             if ficheiro:
                 try:
-                    stream_server.start_stream(fluxo, ficheiro)
-                    print(f"[*] StreamServer associado ao ficheiro {ficheiro} para o fluxo {fluxo}.")
+                    _iniciar_stream_local(stream_server, fluxo, ficheiro, fps=20.0)
                 except Exception as e:
                     print(f"[-] Erro ao carregar vídeo para {fluxo}: {e}")
-            reenviar_a_todos_exceto({"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq}, None)
-            print(f"[*] Fluxo '{fluxo}' anunciado (e anúncios periódicos ativados a cada 10s).")
+            else:
+                fluxos_locais[fluxo] = fluxos_locais.get(fluxo, 0) + 1
+                seq = fluxos_locais[fluxo]
+                with rotas_lock:
+                    tabela_rotas[fluxo] = {"servidor": meu_id, "origem": "LOCAL", "metrica": 0.0, "destinos": set(), "ativa": False, "seq": seq}
+                reenviar_a_todos_exceto({"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq}, None)
+                print(f"[*] Fluxo '{fluxo}' anunciado (e anúncios periódicos ativados a cada 10s).")
         elif acao == "stream":
             if len(cmd) < 3:
                 print("Uso: stream <fluxo> <ficheiro_mjpeg> [fps]")
@@ -361,15 +509,8 @@ if __name__ == "__main__":
                 fluxo = cmd[1]
                 ficheiro = cmd[2]
                 fps = float(cmd[3]) if len(cmd) > 3 else 20.0
-                fluxos_locais[fluxo] = fluxos_locais.get(fluxo, 0) + 1
-                seq = fluxos_locais[fluxo]
-                with rotas_lock:
-                    if fluxo not in tabela_rotas:
-                        tabela_rotas[fluxo] = {"servidor": meu_id, "origem": "LOCAL", "metrica": 0.0, "destinos": set(), "ativa": False, "seq": seq}
                 try:
-                    stream_server.start_stream(fluxo, ficheiro, fps=fps)
-                    print(f"[*] Stream {fluxo} pronto para transmissão a {fps} fps a partir de {ficheiro}.")
-                    reenviar_a_todos_exceto({"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq}, None)
+                    _iniciar_stream_local(stream_server, fluxo, ficheiro, fps=fps)
                 except Exception as e:
                     print(f"[-] Erro ao iniciar stream {fluxo}: {e}")
         elif acao == "ativar":
@@ -381,28 +522,29 @@ if __name__ == "__main__":
                     print(f"[*] Pedido de ATIVA para {fluxo} enviado a {tabela_rotas[fluxo]['origem']}.")
         elif acao == "desativar":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            fluxos_em_play.discard(fluxo)  # Remove da reprodução local, se estivesse
+            enviar_desativa = None
             with rotas_lock:
+                fluxos_em_play.discard(fluxo)  # Remove da reprodução local, se estivesse
                 if fluxo in tabela_rotas:
                     rota = tabela_rotas[fluxo]
-                    rota["ativa"] = False
-                    rota["destinos"].clear()
-                    if rota["origem"] != "LOCAL":
-                        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": fluxo}, rota["origem"])
-                    print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
+                    if not rota["destinos"]:
+                        rota["ativa"] = False
+                        if rota["origem"] != "LOCAL":
+                            enviar_desativa = rota["origem"]
+                        print(f"[*] Pedido de DESATIVA para {fluxo} enviado a {rota['origem']}.")
+                    else:
+                        print(f"[*] Consumo local de {fluxo} desativado (rota mantida para {len(rota['destinos'])} destino(s)).")
+                if not fluxos_em_play and forwarder and not forwarder._running:
+                    try:
+                        forwarder.start()
+                    except OSError:
+                        pass
+            if enviar_desativa:
+                enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": fluxo}, enviar_desativa)
         elif acao == "play":
             fluxo = cmd[1] if len(cmd) > 1 else "Stream1"
-            fluxos_em_play.add(fluxo)
-            if forwarder:
-                forwarder.stop()
-            with rotas_lock:
-                if fluxo in tabela_rotas:
-                    tabela_rotas[fluxo]["ativa"] = True
-                    if tabela_rotas[fluxo]["origem"] != "LOCAL":
-                        enviar_para_vizinho({"tipo": "ATIVA", "fluxo": fluxo}, tabela_rotas[fluxo]["origem"])
-            print(f"[*] A abrir VideoClient local na porta 25000 para o fluxo {fluxo}...")
             try:
-                subprocess.Popen([sys.executable, "-m", "src.dados.video_client", fluxo])
+                _executar_play(fluxo, forwarder)
             except Exception as e:
                 print(f"[-] Erro ao abrir o cliente de vídeo: {e}")
         elif acao == "trace":
