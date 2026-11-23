@@ -10,7 +10,9 @@ from src.dados.data_plane import OverlayForwarder, StreamServer
 
 rotas_lock = threading.Lock()
 tabela_rotas = {}
+rotas_candidatas = {}     # Guarda rotas alternativas por fluxo/vizinho para failover rápido
 vizinhos_ativos = {}
+vizinhos_ids = {}         # Mapeia IP do vizinho -> node_id (aprendido via HELLO)
 atraso_vizinhos = {}      # [Elemento 1] Guarda o atraso em ms medido via PING/PONG
 fluxos_locais = {}        # Guarda os fluxos anunciados por este servidor (e o seu seq)
 fluxos_em_play = set()    # [Novo] Guarda os fluxos que este próprio nó está a assistir
@@ -50,16 +52,21 @@ def handle_incoming_connections(listen_port):
     
     while True:
         conn, addr = s.accept()
-        threading.Thread(target=handle_peer, args=(conn, addr), daemon=True).start()
+        threading.Thread(target=handle_peer, args=(conn, addr, False), daemon=True).start()
 
 
-def handle_peer(conn, addr):
+def handle_peer(conn, addr, iniciador=False):
     """[Elemento 1] Gere a ligação TCP full-duplex, falhas e mensagens de controlo."""
     ip_vizinho = addr[0]
     vizinhos_ativos[ip_vizinho] = conn
     if ip_vizinho not in atraso_vizinhos:
         atraso_vizinhos[ip_vizinho] = 1.0
     print(f"[+] Vizinho ligado em TCP: {ip_vizinho}")
+    if not iniciador and meu_id:
+        try:
+            conn.sendall((json.dumps({"tipo": "HELLO", "id": meu_id}) + "\n").encode('utf-8'))
+        except Exception:
+            pass
     try:
         while True:
             data = conn.recv(1024)
@@ -72,7 +79,10 @@ def handle_peer(conn, addr):
                 tipo = mensagem.get("tipo")
                 
                 if tipo == "HELLO":
-                    print(f"[HELLO] Vizinho {mensagem.get('id')} ({ip_vizinho}) ativo.")
+                    viz_id = mensagem.get("id")
+                    if viz_id:
+                        vizinhos_ids[ip_vizinho] = viz_id
+                    print(f"[HELLO] Vizinho {viz_id} ({ip_vizinho}) ativo.")
                 elif tipo == "PING":
                     enviar_para_vizinho({"tipo": "PONG", "ts": mensagem["ts"]}, ip_vizinho)
                 elif tipo == "PONG":
@@ -89,19 +99,31 @@ def handle_peer(conn, addr):
     except Exception as e:
         print(f"[-] Erro com vizinho {ip_vizinho}: {e}")
     finally:
-        if ip_vizinho in vizinhos_ativos:
+        era_ligacao_ativa = vizinhos_ativos.get(ip_vizinho) is conn
+        id_morto = None
+        if era_ligacao_ativa:
             del vizinhos_ativos[ip_vizinho]
-        if ip_vizinho in atraso_vizinhos:
-            del atraso_vizinhos[ip_vizinho]
-        limpar_rotas_vizinho_falhado(ip_vizinho)
+            atraso_vizinhos.pop(ip_vizinho, None)
+            id_morto = vizinhos_ids.pop(ip_vizinho, None)
+            limpar_rotas_vizinho_falhado(ip_vizinho, id_morto=id_morto)
         conn.close()
-        print(f"[-] Vizinho {ip_vizinho} desligou-se (rotas associadas atualizadas).")
+        if era_ligacao_ativa:
+            print(f"[-] Vizinho {ip_vizinho} desligou-se (rotas associadas atualizadas).")
 
 
-def limpar_rotas_vizinho_falhado(ip_morto):
-    """[Elementos 1 e 2] Remove o vizinho caído dos destinos e invalida rotas onde ele era a origem."""
+def limpar_rotas_vizinho_falhado(ip_morto, id_morto=None):
+    """[Elementos 1 e 2] Remove vizinho caído e faz failover imediato para a melhor rota alternativa."""
     desativar_a_montante = []
+    ativar_failover = []
     with rotas_lock:
+        # Limpar o vizinho morto (e rotas que passem por ele) do cache de candidatas
+        for id_fluxo, cands in list(rotas_candidatas.items()):
+            cands.pop(ip_morto, None)
+            if id_morto:
+                for cand_ip in list(cands.keys()):
+                    if id_morto in cands[cand_ip].get("caminho", []):
+                        cands.pop(cand_ip, None)
+
         for id_fluxo, rota in list(tabela_rotas.items()):
             if ip_morto in rota["destinos"]:
                 rota["destinos"].remove(ip_morto)
@@ -110,9 +132,38 @@ def limpar_rotas_vizinho_falhado(ip_morto):
                     rota["ativa"] = False
                     if rota["origem"] != ip_morto:
                         desativar_a_montante.append((id_fluxo, rota["origem"]))
+
             if rota["origem"] == ip_morto:
-                print(f"[!] A origem ({ip_morto}) do fluxo {id_fluxo} falhou! A aguardar rota alternativa...")
-                rota["metrica"] = float('inf')
+                # Procurar a rota alternativa ativa com menor atraso acumulado
+                cands = rotas_candidatas.get(id_fluxo, {})
+                melhor_ip = None
+                melhor_cand = None
+                for cand_ip, cand in cands.items():
+                    if cand_ip == ip_morto or cand_ip not in vizinhos_ativos:
+                        continue
+                    if cand_ip in rota["destinos"]:
+                        continue
+                    if melhor_cand is None or cand["metrica"] < melhor_cand["metrica"]:
+                        melhor_ip = cand_ip
+                        melhor_cand = cand
+
+                if melhor_ip is not None:
+                    rota["origem"] = melhor_ip
+                    rota["metrica"] = melhor_cand["metrica"]
+                    rota["servidor"] = melhor_cand["servidor"]
+                    rota["seq"] = max(rota.get("seq", 0), melhor_cand.get("seq", 0))
+                    log_seguro(
+                        f"[FAILOVER] Origem ({ip_morto}) falhou! Rota '{id_fluxo}' comutada "
+                        f"para {melhor_ip} (Atraso: {melhor_cand['metrica']} ms)."
+                    )
+                    if rota["ativa"]:
+                        ativar_failover.append((id_fluxo, melhor_ip))
+                else:
+                    print(f"[!] A origem ({ip_morto}) do fluxo {id_fluxo} falhou! A aguardar rota alternativa...")
+                    rota["metrica"] = float('inf')
+
+    for id_fluxo, ip_novo in ativar_failover:
+        enviar_para_vizinho({"tipo": "ATIVA", "fluxo": id_fluxo}, ip_novo)
     for id_fluxo, ip_orig in desativar_a_montante:
         enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, ip_orig)
 
@@ -133,7 +184,14 @@ def anuncios_periodicos_servidor():
         for fluxo in list(fluxos_locais.keys()):
             fluxos_locais[fluxo] += 1
             seq = fluxos_locais[fluxo]
-            msg = {"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq}
+            msg = {
+                "tipo": "ANUNCIO",
+                "servidor": meu_id,
+                "fluxo": fluxo,
+                "metrica": 0.0,
+                "seq": seq,
+                "caminho": [meu_id] if meu_id else [],
+            }
             reenviar_a_todos_exceto(msg, None)
 
 
@@ -149,21 +207,29 @@ def conectar_aos_vizinhos(node_id, neighbors, listen_port):
             s.settimeout(None)
             s.sendall((json.dumps({"tipo": "HELLO", "id": node_id}) + "\n").encode('utf-8'))
             s.sendall((json.dumps({"tipo": "PING", "ts": time.time()}) + "\n").encode('utf-8'))
-            threading.Thread(target=handle_peer, args=(s, (ip_viz, listen_port)), daemon=True).start()
+            threading.Thread(target=handle_peer, args=(s, (ip_viz, listen_port), True), daemon=True).start()
         except Exception:
             print(f"[*] Vizinho {ip_viz} ainda não iniciou (ligará quando arrancar).")
 
 
 def processar_anuncio(msg, ip_vizinho):
-    """[Elemento 2] Atualiza tabela de rotas com base no atraso acumulado e número de sequência."""
+    """[Elemento 2] Atualiza tabela de rotas com base no atraso acumulado, previne ciclos e desativa origem antiga."""
     id_fluxo = msg["fluxo"]
     servidor_id = msg.get("servidor", "S1")
     seq = msg.get("seq", 1)
+    caminho_recebido = list(msg.get("caminho", []))
+
+    # Prevenção de ciclos (path-vector): ignora anúncios que já passaram por este nó
+    if meu_id and meu_id in caminho_recebido:
+        return
+
     custo_link = atraso_vizinhos.get(ip_vizinho, 1.0)
     nova_metrica = round(msg["metrica"] + custo_link, 3)
-    
+    novo_caminho = caminho_recebido + ([meu_id] if meu_id else [])
+
     atualizou_rota = False
     re_ativar_nova_origem = False
+    desativar_origem_antiga = None
     rota_descoberta = False
     origem_alterada = False
 
@@ -172,15 +238,28 @@ def processar_anuncio(msg, ip_vizinho):
         if rota_atual and rota_atual["origem"] == "LOCAL":
             return
 
+        # Registar rota candidata deste vizinho para failover instantâneo se a origem atual cair
+        candidatos = rotas_candidatas.setdefault(id_fluxo, {})
+        candidatos[ip_vizinho] = {
+            "servidor": servidor_id,
+            "metrica": nova_metrica,
+            "seq": seq,
+            "caminho": caminho_recebido,
+        }
+
         if (rota_atual is None or 
             seq > rota_atual.get("seq", 0) or 
             (seq == rota_atual.get("seq", 0) and nova_metrica < rota_atual["metrica"])):
             
-            destinos_atuais = rota_atual["destinos"] if rota_atual else set()
-            estado_atual = rota_atual["ativa"] if rota_atual else False
+            destinos_atuais = set(rota_atual["destinos"]) if rota_atual else set()
+            estado_anterior = rota_atual["ativa"] if rota_atual else False
             origem_antiga = rota_atual["origem"] if rota_atual else None
             rota_descoberta = rota_atual is None
             origem_alterada = origem_antiga is not None and origem_antiga != ip_vizinho
+
+            # Evitar ciclo de encaminhamento UDP se a nova origem estava antes nos destinos
+            destinos_atuais.discard(ip_vizinho)
+            estado_atual = estado_anterior and (bool(destinos_atuais) or id_fluxo in fluxos_em_play)
 
             tabela_rotas[id_fluxo] = {
                 "servidor": servidor_id,
@@ -194,6 +273,8 @@ def processar_anuncio(msg, ip_vizinho):
             
             if estado_atual and origem_alterada:
                 re_ativar_nova_origem = True
+            if estado_anterior and origem_alterada and origem_antiga != "LOCAL":
+                desativar_origem_antiga = origem_antiga
 
             if rota_descoberta:
                 log_seguro(
@@ -203,14 +284,24 @@ def processar_anuncio(msg, ip_vizinho):
             elif origem_alterada:
                 log_seguro(
                     f"[RE-ROTEAMENTO] Rota para '{id_fluxo}' transferida de "
-                    f"{origem_antiga} para {ip_vizinho}!"
+                    f"{origem_antiga} para {ip_vizinho} (Atraso: {nova_metrica} ms)!"
                 )
             
+    # Make-before-break: ativa primeiro a nova origem e depois poda a origem antiga (evita duplicados)
     if re_ativar_nova_origem:
         enviar_para_vizinho({"tipo": "ATIVA", "fluxo": id_fluxo}, ip_vizinho)
+    if desativar_origem_antiga:
+        enviar_para_vizinho({"tipo": "DESATIVA", "fluxo": id_fluxo}, desativar_origem_antiga)
 
     if atualizou_rota:
-        msg_reenvio = {"tipo": "ANUNCIO", "servidor": servidor_id, "fluxo": id_fluxo, "metrica": nova_metrica, "seq": seq}
+        msg_reenvio = {
+            "tipo": "ANUNCIO",
+            "servidor": servidor_id,
+            "fluxo": id_fluxo,
+            "metrica": nova_metrica,
+            "seq": seq,
+            "caminho": novo_caminho,
+        }
         reenviar_a_todos_exceto(msg_reenvio, ip_vizinho)
 
 
@@ -329,7 +420,14 @@ def _iniciar_stream_local(stream_server, fluxo, ficheiro, fps=20.0):
     stream_server.start_stream(fluxo, ficheiro, fps=float(fps))
     print(f"[*] Stream {fluxo} pronto para transmissão a {fps} fps a partir de {ficheiro}.")
     reenviar_a_todos_exceto(
-        {"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq},
+        {
+            "tipo": "ANUNCIO",
+            "servidor": meu_id,
+            "fluxo": fluxo,
+            "metrica": 0.0,
+            "seq": seq,
+            "caminho": [meu_id] if meu_id else [],
+        },
         None,
     )
 
@@ -500,7 +598,17 @@ if __name__ == "__main__":
                 seq = fluxos_locais[fluxo]
                 with rotas_lock:
                     tabela_rotas[fluxo] = {"servidor": meu_id, "origem": "LOCAL", "metrica": 0.0, "destinos": set(), "ativa": False, "seq": seq}
-                reenviar_a_todos_exceto({"tipo": "ANUNCIO", "servidor": meu_id, "fluxo": fluxo, "metrica": 0.0, "seq": seq}, None)
+                reenviar_a_todos_exceto(
+                    {
+                        "tipo": "ANUNCIO",
+                        "servidor": meu_id,
+                        "fluxo": fluxo,
+                        "metrica": 0.0,
+                        "seq": seq,
+                        "caminho": [meu_id] if meu_id else [],
+                    },
+                    None,
+                )
                 print(f"[*] Fluxo '{fluxo}' anunciado (e anúncios periódicos ativados a cada 10s).")
         elif acao == "stream":
             if len(cmd) < 3:

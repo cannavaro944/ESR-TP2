@@ -3,12 +3,12 @@ scripts/run_all_tests.py — Runner único de todos os testes do projeto
 =====================================================================
 Executa:
   1. tests.test_standalone       (RTP, MJPEG loop, Forwarder, Pipeline, Checklist)
-  2. tests.test_integration_ott  (Integração Controlo ott.py <-> Plano de Dados)
-  3. tests.teste_tcp             (Eco TCP base)
-  4. Teste real de vídeo         (StreamServer + assets/movie.Mjpeg + VideoClient)
+  2. tests.test_integration_ott  (Integração Controlo ott.py <-> Plano de Dados + Failover)
+  3. Teste real de vídeo         (StreamServer + assets/movie.Mjpeg + VideoClient)
 
 Uso:
   python scripts/run_all_tests.py
+  python scripts/run_all_tests.py --no-gui
 """
 
 import subprocess
@@ -65,6 +65,8 @@ def _test_real_video_gui() -> tuple:
 
 
 def main():
+    no_gui = "--no-gui" in sys.argv[1:]
+
     print("=" * 70)
     print("  ESR TP2 — Execução Completa de Testes")
     print("=" * 70)
@@ -72,9 +74,9 @@ def main():
     checks = [
         _run_module("tests.test_standalone"),
         _run_module("tests.test_integration_ott"),
-        _run_module("tests.teste_tcp"),
-        _test_real_video_gui(),
     ]
+    if not no_gui:
+        checks.append(_test_real_video_gui())
 
     print("\n" + "=" * 70)
     print("  RESUMO FINAL")

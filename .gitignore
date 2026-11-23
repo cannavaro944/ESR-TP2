@@ -6,5 +6,8 @@ __pycache__/
 .idea/
 .vscode/
 test_video_*.Mjpeg
-parte dos colega 1 e 2/
 *.pdf
+ProgEx/
+GUIAO_APRESENTACAO.md
+EXPLICACAO_TRABALHO.md
+tests/teste_tcp.py
