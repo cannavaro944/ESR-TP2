@@ -16,7 +16,7 @@ O projeto implementa streaming multicast aplicacional sobre uma rede overlay e s
 - `src/dados/video_stream.py` — leitor sequencial de ficheiros `.Mjpeg` com repetição automática em loop no EOF (`VideoStream`).
 - `src/dados/data_plane.py` — `OverlayForwarder` (encaminhamento multicast UDP *zero-decode*) e `StreamServer` (multi-stream com controlo de framerate anti-drift via `time.perf_counter()`).
 - `src/dados/video_client.py` — cliente gráfico Tkinter/Pillow desacoplado via `queue.Queue(maxsize=5)` e fecho limpo (`WM_DELETE_WINDOW` → `DESATIVA` automático).
-- `config/topology.conf` — topologia overlay e adjacências em JSON (atualmente Cenário 2 com 6 nós: `S1`, `n10`, `n9`, `n5`, `n20`, `n21`).
+- `config/topology.conf` — topologia overlay e adjacências em JSON (Cenário 3 em malha com 13 nós: 2 servidores `S1` e `n16`, 6 routers overlay `n10`, `n9`, `n6`, `n5`, `n2`, `n1`, e 5 clientes `n20`, `n21`, `n22`, `n23`, `n17`).
 - `topologias/topology_tp2.xml` — cenário underlay do emulador CORE (25 nós: 10 routers, 5 switches, 10 PCs).
 - `assets/movie.Mjpeg` — ficheiro de vídeo de exemplo.
 - `scripts/launch_core.sh` — prepara o Bootstrapper e os nós do overlay no CORE em terminais interativos (sem iniciar fluxos automaticamente; suporta `--auto` e `--auto --with-stream`).
@@ -30,7 +30,7 @@ O projeto implementa streaming multicast aplicacional sobre uma rede overlay e s
 ## Estado de desenvolvimento
 
 - **Concluído e validado:** Bootstrapper, ligações TCP full-duplex com `HELLO` e `PING`/`PONG`, anúncios periódicos com métrica de atraso acumulado e vetor `caminho` anti-ciclos, ativação inversa (`ATIVA`), pruning seletivo (`DESATIVA` manual e ao fechar janela), *make-before-break* sem duplicação, failover imediato por menor atraso (`rotas_candidatas`), comando `TRACE`, plano de dados completo (`RtpPacket`, `VideoStream`, `OverlayForwarder`, `StreamServer`, `VideoClient`) e testes automatizados a passar (`3/3` suites).
-- **Próximos passos para entrega final:** expandir `config/topology.conf` para o Cenário 3 (malha com caminhos alternativos, mais clientes e 2.º servidor com 2 streams cada), confirmar serviços FRR (`FRROSPFv2`/`FRRzebra`/`IPForward`) em todos os routers de `topologias/topology_tp2.xml`, recolher métricas/capturas nos 3 cenários e redigir o relatório LNCS (`ESR-TP2-PLx-Gy-Rel.pdf`).
+- **Próximos passos para entrega final:** validar em CORE o Cenário 3 (2 servidores × 2 streams cada + failover em malha em `config/topology.conf`), confirmar serviços FRR (`FRROSPFv2`/`FRRzebra`/`IPForward`) em todos os routers de `topologias/topology_tp2.xml`, recolher métricas/capturas nos 3 cenários e redigir o relatório LNCS (`ESR-TP2-PLx-Gy-Rel.pdf`).
 
 ## Execução rápida no CORE
 
