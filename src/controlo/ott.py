@@ -55,12 +55,43 @@ def handle_incoming_connections(listen_port):
         threading.Thread(target=handle_peer, args=(conn, addr, False), daemon=True).start()
 
 
+def _registar_hello_vizinho(ip_vizinho, conn, viz_id, iniciador):
+    """Regista o ID do vizinho e resolve ligações TCP duplicadas em links virtuais multi-hop.
+
+    Devolve (manter_esta_ligacao, conn_duplicada_a_fechar).
+    Regra determinística: vence a ligação iniciada pelo nó com menor node_id.
+    """
+    if not viz_id:
+        return True, None
+
+    conn_a_fechar = None
+    with rotas_lock:
+        ip_existente = None
+        for ip_k, id_k in list(vizinhos_ids.items()):
+            if id_k == viz_id and ip_k != ip_vizinho and ip_k in vizinhos_ativos:
+                ip_existente = ip_k
+                break
+
+        if ip_existente is not None and meu_id and meu_id != viz_id:
+            esta_vence = (meu_id < viz_id and iniciador) or (viz_id < meu_id and not iniciador)
+            if not esta_vence:
+                return False, None
+            # Esta ligação vence: substitui a antiga ligação duplicada para o mesmo vizinho
+            conn_a_fechar = vizinhos_ativos.pop(ip_existente, None)
+            atraso_vizinhos.pop(ip_existente, None)
+            vizinhos_ids.pop(ip_existente, None)
+
+        vizinhos_ids[ip_vizinho] = viz_id
+    return True, conn_a_fechar
+
+
 def handle_peer(conn, addr, iniciador=False):
     """[Elemento 1] Gere a ligação TCP full-duplex, falhas e mensagens de controlo."""
     ip_vizinho = addr[0]
     vizinhos_ativos[ip_vizinho] = conn
     if ip_vizinho not in atraso_vizinhos:
         atraso_vizinhos[ip_vizinho] = 1.0
+    fecho_duplicado = False
     print(f"[+] Vizinho ligado em TCP: {ip_vizinho}")
     if not iniciador and meu_id:
         try:
@@ -80,8 +111,15 @@ def handle_peer(conn, addr, iniciador=False):
                 
                 if tipo == "HELLO":
                     viz_id = mensagem.get("id")
-                    if viz_id:
-                        vizinhos_ids[ip_vizinho] = viz_id
+                    manter, conn_antiga = _registar_hello_vizinho(ip_vizinho, conn, viz_id, iniciador)
+                    if conn_antiga is not None:
+                        try:
+                            conn_antiga.close()
+                        except Exception:
+                            pass
+                    if not manter:
+                        fecho_duplicado = True
+                        break
                     print(f"[HELLO] Vizinho {viz_id} ({ip_vizinho}) ativo.")
                 elif tipo == "PING":
                     enviar_para_vizinho({"tipo": "PONG", "ts": mensagem["ts"]}, ip_vizinho)
@@ -96,18 +134,24 @@ def handle_peer(conn, addr, iniciador=False):
                     processar_desativacao(mensagem, ip_vizinho)
                 elif tipo == "TRACE":
                     processar_trace(mensagem, ip_vizinho)
+            if fecho_duplicado:
+                break
     except Exception as e:
-        print(f"[-] Erro com vizinho {ip_vizinho}: {e}")
+        if not fecho_duplicado:
+            print(f"[-] Erro com vizinho {ip_vizinho}: {e}")
     finally:
         era_ligacao_ativa = vizinhos_ativos.get(ip_vizinho) is conn
         id_morto = None
         if era_ligacao_ativa:
             del vizinhos_ativos[ip_vizinho]
             atraso_vizinhos.pop(ip_vizinho, None)
-            id_morto = vizinhos_ids.pop(ip_vizinho, None)
-            limpar_rotas_vizinho_falhado(ip_vizinho, id_morto=id_morto)
+            id_desligado = vizinhos_ids.pop(ip_vizinho, None)
+            if not fecho_duplicado and id_desligado and id_desligado not in vizinhos_ids.values():
+                id_morto = id_desligado
+            if not fecho_duplicado:
+                limpar_rotas_vizinho_falhado(ip_vizinho, id_morto=id_morto)
         conn.close()
-        if era_ligacao_ativa:
+        if era_ligacao_ativa and not fecho_duplicado:
             print(f"[-] Vizinho {ip_vizinho} desligou-se (rotas associadas atualizadas).")
 
 

@@ -154,6 +154,48 @@ def test_rerouting_desativa_origem_antiga_e_failover():
         _reset_ott_state("")
 
 
+def test_deduplicacao_links_virtuais_e_movie2():
+    print("\n=== A testar deduplicação TCP em links virtuais + assets/movie2.Mjpeg ===")
+    # 1. Lado n6 (n6 > n2): ligação iniciada por n2 (iniciador=False) deve vencer
+    _reset_ott_state("n6")
+    c_loser, c_winner = object(), object()
+    ott.vizinhos_ativos["10.0.15.2"] = c_loser
+    manter, antiga = ott._registar_hello_vizinho("10.0.15.2", c_loser, "n2", iniciador=True)
+    assert manter is True and antiga is None
+
+    ott.vizinhos_ativos["10.0.13.2"] = c_winner
+    manter, antiga = ott._registar_hello_vizinho("10.0.13.2", c_winner, "n2", iniciador=False)
+    assert manter is True and antiga is c_loser, "Ligação iniciada por n2 devia substituir a duplicada"
+    assert "10.0.13.2" in ott.vizinhos_ativos and "10.0.15.2" not in ott.vizinhos_ativos
+
+    # 2. Lado n2 (n2 < n6): ligação iniciada por n2 (iniciador=True) vence; a aceite (iniciador=False) fecha
+    _reset_ott_state("n2")
+    c_win2, c_lose2 = object(), object()
+    ott.vizinhos_ativos["10.0.7.2"] = c_win2
+    manter, antiga = ott._registar_hello_vizinho("10.0.7.2", c_win2, "n6", iniciador=True)
+    assert manter is True and antiga is None
+
+    ott.vizinhos_ativos["10.0.11.1"] = c_lose2
+    manter, antiga = ott._registar_hello_vizinho("10.0.11.1", c_lose2, "n6", iniciador=False)
+    assert manter is False and antiga is None, "Ligação duplicada aceite em n2 devia ser descartada"
+    _reset_ott_state("")
+
+    # 3. Validar leitura e loop de assets/movie2.Mjpeg
+    from pathlib import Path
+    from src.dados.video_stream import VideoStream
+
+    movie2 = Path(__file__).resolve().parents[1] / "assets" / "movie2.Mjpeg"
+    assert movie2.is_file(), f"Ficheiro em falta: {movie2}"
+    with VideoStream(str(movie2)) as vs:
+        f1 = vs.next_frame()
+        f2 = vs.next_frame()
+        assert f1.startswith(b"\xff\xd8") and f2.startswith(b"\xff\xd8"), "Frames inválidos em movie2.Mjpeg"
+        assert f1 != f2, "Frames consecutivos de movie2.Mjpeg devem ser distintos"
+
+    print("[OK] Deduplicação determinística de links virtuais e assets/movie2.Mjpeg validados!")
+
+
 if __name__ == "__main__":
     test_integration()
     test_rerouting_desativa_origem_antiga_e_failover()
+    test_deduplicacao_links_virtuais_e_movie2()

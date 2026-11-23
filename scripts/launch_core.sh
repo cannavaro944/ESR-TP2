@@ -29,8 +29,8 @@ STREAM_ID="Stream1"
 VIDEO_FILE="assets/movie.Mjpeg"
 FPS="20"
 SERVER_NODE="S1"
-NODES="S1 n10 n9 n5 n20 n21"
-CLIENTS="n20 n21"
+NODES=""
+CLIENTS=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -46,7 +46,7 @@ while [[ $# -gt 0 ]]; do
         --nodes)        NODES="$2"; shift 2 ;;
         --clients)      CLIENTS="$2"; shift 2 ;;
         -h|--help)
-            echo "Uso: $0 [--auto|--bg] [--with-stream] [--session /tmp/pycore.X] [--boot-ip 10.0.19.21]"
+            echo "Uso: $0 [--auto|--bg] [--with-stream] [--session /tmp/pycore.X] [--boot-ip 10.0.19.21] [--nodes 'S1 ...']"
             exit 0
             ;;
         *)
@@ -55,6 +55,24 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# Ler automaticamente os nós de config/topology.conf quando --nodes/--clients não forem especificados
+TOPOLOGY_FILE="$PROJECT_DIR/config/topology.conf"
+if [[ -z "$NODES" ]]; then
+    if [[ -f "$TOPOLOGY_FILE" ]]; then
+        NODES="$(python3 -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); print(" ".join(d.keys()))' "$TOPOLOGY_FILE")"
+    else
+        NODES="S1 n10 n9 n5 n20 n21"
+    fi
+fi
+
+if [[ -z "$CLIENTS" ]]; then
+    if [[ -f "$TOPOLOGY_FILE" ]]; then
+        CLIENTS="$(python3 -c 'import json, sys; d = json.load(open(sys.argv[1], encoding="utf-8")); srv = {sys.argv[2], "S2"}; print(" ".join(k for k, v in d.items() if len(v) == 1 and k not in srv))' "$TOPOLOGY_FILE" "$SERVER_NODE")"
+    else
+        CLIENTS="n20 n21"
+    fi
+fi
 
 if [[ -z "$SESSION_DIR" ]]; then
     SESSION_DIR="$(ls -d /tmp/pycore.* 2>/dev/null | head -n 1 || true)"
@@ -97,9 +115,9 @@ if [[ "$AUTO_MODE" -eq 1 ]]; then
         "cd '$PROJECT_DIR' && python3 -u -m src.controlo.server > /tmp/esr_bootstrapper.log 2>&1 &"
     sleep 1
 
-    # 2. Nós intermédios primeiro (excluindo servidor e clientes)
+    # 2. Nós intermédios primeiro (excluindo servidores e clientes)
     for node in $NODES; do
-        if [[ "$node" == "$SERVER_NODE" ]] || [[ " $CLIENTS " == *" $node "* ]]; then
+        if [[ "$node" == "$SERVER_NODE" || "$node" == "S2" ]] || [[ " $CLIENTS " == *" $node "* ]]; then
             continue
         fi
         echo "    -> A iniciar nó intermédio $node..."
@@ -127,8 +145,8 @@ if [[ "$AUTO_MODE" -eq 1 ]]; then
     else
         echo ""
         echo "[OK] Bootstrapper e nós intermédios preparados em background (nenhum fluxo iniciado)!"
-        echo "     Nos terminais do CORE, arranque o servidor e clientes manualmente:"
-        echo "       Servidor ($SERVER_NODE): ./scripts/start_node.sh $SERVER_NODE"
+        echo "     Nos terminais do CORE, arranque os servidores e clientes manualmente:"
+        echo "       Servidores ($SERVER_NODE / S2): ./scripts/start_node.sh <node_id>"
         echo "       Clientes ($CLIENTS): ./scripts/start_node.sh <node_id>"
     fi
 
@@ -146,6 +164,8 @@ if command -v gnome-terminal >/dev/null 2>&1; then
     for node in $NODES; do
         if [[ "$node" == "$SERVER_NODE" ]]; then
             TABS+=(--tab --title="$node (Srv)" -- bash -c "sleep 1; vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash")
+        elif [[ "$node" == "S2" ]]; then
+            TABS+=(--tab --title="$node (Srv2)" -- bash -c "sleep 1.5; vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash")
         else
             TABS+=(--tab --title="$node" -- bash -c "sleep 1.5; vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash")
         fi
@@ -153,7 +173,9 @@ if command -v gnome-terminal >/dev/null 2>&1; then
 
     gnome-terminal "${TABS[@]}" &
     echo "[OK] Overlay preparado em separadores (nenhum fluxo iniciado ainda)!"
+    echo "     Nós carregados ($TOPOLOGY_FILE): $NODES"
     echo "     No servidor ($SERVER_NODE):     stream $STREAM_ID $VIDEO_FILE $FPS"
+    echo "     2.º stream / Srv2 (S2):   stream Stream2 assets/movie2.Mjpeg 20"
     echo "     Nos clientes ($CLIENTS):  play $STREAM_ID"
 elif command -v xterm >/dev/null 2>&1; then
     echo "[*] A abrir janelas xterm para cada nó (gnome-terminal não instalado)..."
@@ -162,13 +184,17 @@ elif command -v xterm >/dev/null 2>&1; then
     for node in $NODES; do
         if [[ "$node" == "$SERVER_NODE" ]]; then
             xterm -T "$node (Srv)" -e bash -c "vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash" &
+        elif [[ "$node" == "S2" ]]; then
+            xterm -T "$node (Srv2)" -e bash -c "vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash" &
         else
             xterm -T "$node" -e bash -c "vcmd -c '$SESSION_DIR/$node' -- bash -c \"cd '$PROJECT_DIR' && DISPLAY='$DISPLAY' python3 -m src.controlo.ott '$node' '$BOOT_IP' '$TCP_PORT'\"; exec bash" &
         fi
         sleep 0.3
     done
     echo "[OK] Overlay preparado em janelas xterm (nenhum fluxo iniciado ainda)!"
+    echo "     Nós carregados ($TOPOLOGY_FILE): $NODES"
     echo "     No servidor ($SERVER_NODE):     stream $STREAM_ID $VIDEO_FILE $FPS"
+    echo "     2.º stream / Srv2 (S2):   stream Stream2 assets/movie2.Mjpeg 20"
     echo "     Nos clientes ($CLIENTS):  play $STREAM_ID"
 else
     echo "[AVISO] Nem 'gnome-terminal' nem 'xterm' encontrados. Use './scripts/launch_core.sh --auto'"

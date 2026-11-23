@@ -16,10 +16,10 @@ O projeto implementa streaming multicast aplicacional sobre uma rede overlay e s
 - `src/dados/video_stream.py` — leitor sequencial de ficheiros `.Mjpeg` com repetição automática em loop no EOF (`VideoStream`).
 - `src/dados/data_plane.py` — `OverlayForwarder` (encaminhamento multicast UDP *zero-decode*) e `StreamServer` (multi-stream com controlo de framerate anti-drift via `time.perf_counter()`).
 - `src/dados/video_client.py` — cliente gráfico Tkinter/Pillow desacoplado via `queue.Queue(maxsize=5)` e fecho limpo (`WM_DELETE_WINDOW` → `DESATIVA` automático).
-- `config/topology.conf` — topologia overlay e adjacências em JSON (Cenário 3 em malha com 13 nós: 2 servidores `S1` e `n16`, 6 routers overlay `n10`, `n9`, `n6`, `n5`, `n2`, `n1`, e 5 clientes `n20`, `n21`, `n22`, `n23`, `n17`).
+- `config/topology.conf` — topologia overlay e adjacências em JSON (Cenário 3 em malha com 13 nós: 2 servidores `S1` e `S2`, 6 routers overlay `n10`, `n9`, `n6`, `n5`, `n2`, `n1`, e 5 clientes `n20`, `n21`, `n22`, `n23`, `n17`).
 - `topologias/topology_tp2.xml` — cenário underlay do emulador CORE (25 nós: 10 routers, 5 switches, 10 PCs).
-- `assets/movie.Mjpeg` — ficheiro de vídeo de exemplo.
-- `scripts/launch_core.sh` — prepara o Bootstrapper e os nós do overlay no CORE em terminais interativos (sem iniciar fluxos automaticamente; suporta `--auto` e `--auto --with-stream`).
+- `assets/movie.Mjpeg` e `assets/movie2.Mjpeg` — dois ficheiros de vídeo distintos para demonstração multi-stream e multi-servidor.
+- `scripts/launch_core.sh` — lê automaticamente os nós de `config/topology.conf` e prepara o Bootstrapper e os nós do overlay no CORE em terminais interativos (sem iniciar fluxos automaticamente; suporta `--auto` e `--auto --with-stream`).
 - `scripts/start_node.sh` — atalho para arrancar `boot` ou qualquer nó `ott.py` manualmente dentro de um terminal do CORE.
 - `scripts/stop_core.sh` — termina todos os processos ESR TP2 na sessão CORE ativa.
 - `scripts/run_all_tests.py` — executa todas as suites automatizadas (suporta `--no-gui`).
